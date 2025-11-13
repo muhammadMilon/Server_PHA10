@@ -28,7 +28,9 @@ app.use(async (req, res, next) => {
     console.error("Connection error in middleware:", error);
     res.status(500).json({
       message: "Database connection failed",
-      error: process.env.VERCEL ? "Check MONGODB_URI in Vercel environment variables" : error.message
+      error: process.env.VERCEL
+        ? "Check MONGODB_URI in Vercel environment variables"
+        : error.message,
     });
   }
 });
@@ -84,7 +86,9 @@ async function ensureConnection() {
   }
 
   if (!client) {
-    throw new Error("MongoDB client not initialized. MONGODB_URI environment variable is missing. Please set it in Vercel dashboard under Settings > Environment Variables.");
+    throw new Error(
+      "MongoDB client not initialized. MONGODB_URI environment variable is missing. Please set it in Vercel dashboard under Settings > Environment Variables."
+    );
   }
 
   try {
@@ -276,7 +280,9 @@ function buildWatchlistIdentifierCandidates(idParam) {
 async function bootstrap() {
   try {
     if (!uri || !client) {
-      console.error("⚠️ MongoDB URI not configured. Routes will fail until MONGODB_URI is set.");
+      console.error(
+        "⚠️ MongoDB URI not configured. Routes will fail until MONGODB_URI is set."
+      );
       // Still set up routes, but they'll fail with proper error messages
     } else {
       console.log("🔌 Connecting to MongoDB...");
@@ -607,12 +613,12 @@ async function bootstrap() {
             if (!movie) {
               return entry.movieSnapshot
                 ? {
-                  ...entry.movieSnapshot,
-                  _id: entry.movieKey || entry.movieId,
-                  id: entry.movieKey || entry.movieId,
-                  watchlistedAt: entry.createdAt,
-                  isMissing: true,
-                }
+                    ...entry.movieSnapshot,
+                    _id: entry.movieKey || entry.movieId,
+                    id: entry.movieKey || entry.movieId,
+                    watchlistedAt: entry.createdAt,
+                    isMissing: true,
+                  }
                 : null;
             }
 
@@ -748,11 +754,9 @@ async function bootstrap() {
         res.send({ message: "Movie removed from watchlist" });
       } catch (error) {
         console.error("Error removing from watchlist:", error);
-        res
-          .status(500)
-          .send({
-            message: error.message || "Failed to remove from watchlist",
-          });
+        res.status(500).send({
+          message: error.message || "Failed to remove from watchlist",
+        });
       }
     });
 
@@ -790,11 +794,9 @@ async function bootstrap() {
         res.send({ isWatchlisted: !!entry });
       } catch (error) {
         console.error("Error checking watchlist status:", error);
-        res
-          .status(500)
-          .send({
-            message: error.message || "Failed to check watchlist status",
-          });
+        res.status(500).send({
+          message: error.message || "Failed to check watchlist status",
+        });
       }
     });
 
@@ -929,11 +931,9 @@ async function bootstrap() {
         res.send(convertedMovies);
       } catch (error) {
         console.error("Error fetching top rated:", error);
-        res
-          .status(500)
-          .send({
-            message: error.message || "Failed to fetch top rated movies",
-          });
+        res.status(500).send({
+          message: error.message || "Failed to fetch top rated movies",
+        });
       }
     });
 
@@ -974,11 +974,9 @@ async function bootstrap() {
         res.send(convertedMovies);
       } catch (error) {
         console.error("Error fetching featured movies:", error);
-        res
-          .status(500)
-          .send({
-            message: error.message || "Failed to fetch featured movies",
-          });
+        res.status(500).send({
+          message: error.message || "Failed to fetch featured movies",
+        });
       }
     });
 
@@ -1014,7 +1012,7 @@ async function bootstrap() {
 
 // Start bootstrap - this will run on both local and Vercel
 // Don't await - routes will be set up, connection happens lazily via middleware
-bootstrap().catch(err => {
+bootstrap().catch((err) => {
   console.error("Bootstrap error:", err);
   // Don't crash - let middleware handle connection errors
 });
