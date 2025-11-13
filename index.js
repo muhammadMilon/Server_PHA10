@@ -9,6 +9,30 @@ const port = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
+// Health check route - no DB connection needed
+app.get("/", (req, res) => {
+  res.send("MovieMaster Pro Server is running");
+});
+
+// Middleware to ensure MongoDB connection before handling requests (skip for health check)
+app.use(async (req, res, next) => {
+  // Skip connection check for root path
+  if (req.path === "/") {
+    return next();
+  }
+
+  try {
+    await ensureConnection();
+    next();
+  } catch (error) {
+    console.error("Connection error in middleware:", error);
+    res.status(500).json({
+      message: "Database connection failed",
+      error: process.env.VERCEL ? "Check MONGODB_URI in Vercel environment variables" : error.message
+    });
+  }
+});
+
 // Very light "auth": pass logged-in email via 'x-user-email' header
 function requireAuth(req, res, next) {
   const userEmail = req.header("x-user-email");
@@ -21,22 +45,69 @@ function requireAuth(req, res, next) {
   next();
 }
 
+// Global collections - will be initialized in bootstrap
+let moviesCollection = null;
+let usersCollection = null;
+let watchlistCollection = null;
+let countersCollection = null;
+let client = null;
+let isConnected = false;
+
 const uri = process.env.MONGODB_URI;
 if (!uri) {
   console.error("Missing MONGODB_URI in environment");
-  console.error(
-    "Please create a .env file in the server directory with MONGODB_URI=your_connection_string"
-  );
-  process.exit(1);
+  if (!process.env.VERCEL) {
+    console.error(
+      "Please create a .env file in the server directory with MONGODB_URI=your_connection_string"
+    );
+    process.exit(1);
+  } else {
+    console.error("MONGODB_URI must be set in Vercel environment variables");
+  }
 }
 
-const client = new MongoClient(uri, {
-  serverApi: {
-    version: ServerApiVersion.v1,
-    strict: true,
-    deprecationErrors: true,
-  },
-});
+// Initialize MongoDB client if URI is available
+if (uri) {
+  client = new MongoClient(uri, {
+    serverApi: {
+      version: ServerApiVersion.v1,
+      strict: true,
+      deprecationErrors: true,
+    },
+  });
+}
+
+// Helper to ensure MongoDB connection
+async function ensureConnection() {
+  if (isConnected && moviesCollection) {
+    return;
+  }
+
+  if (!client) {
+    throw new Error("MongoDB client not initialized. MONGODB_URI environment variable is missing. Please set it in Vercel dashboard under Settings > Environment Variables.");
+  }
+
+  try {
+    // Check if already connected
+    if (!isConnected) {
+      await client.connect();
+      isConnected = true;
+    }
+
+    // Initialize collections if not already done
+    if (!moviesCollection) {
+      const database = client.db("MovieMaster");
+      moviesCollection = database.collection("movies");
+      usersCollection = database.collection("users");
+      watchlistCollection = database.collection("watchlists");
+      countersCollection = database.collection("counters");
+    }
+  } catch (error) {
+    console.error("Failed to connect to MongoDB:", error.message);
+    isConnected = false; // Reset connection state on error
+    throw error;
+  }
+}
 
 // Helper function to get next movie ID
 async function getNextMovieId(countersCollection, moviesCollection) {
@@ -204,33 +275,35 @@ function buildWatchlistIdentifierCandidates(idParam) {
 
 async function bootstrap() {
   try {
-    console.log("🔌 Connecting to MongoDB...");
-    await client.connect();
-    console.log("✅ Connected to MongoDB!");
-
-    const database = client.db("MovieMaster");
-    const moviesCollection = database.collection("movies");
-    const usersCollection = database.collection("users");
-    const watchlistCollection = database.collection("watchlists");
-    const countersCollection = database.collection("counters");
-
-    try {
-      await watchlistCollection.createIndex(
-        { userEmail: 1, movieKey: 1 },
-        { unique: true }
-      );
-      await watchlistCollection.createIndex({ userEmail: 1, createdAt: -1 });
-    } catch (indexError) {
-      console.warn(
-        "Warning: failed to create watchlist indexes",
-        indexError?.message || indexError
-      );
+    if (!uri || !client) {
+      console.error("⚠️ MongoDB URI not configured. Routes will fail until MONGODB_URI is set.");
+      // Still set up routes, but they'll fail with proper error messages
+    } else {
+      console.log("🔌 Connecting to MongoDB...");
+      try {
+        await ensureConnection();
+        console.log("✅ Connected to MongoDB!");
+      } catch (connError) {
+        console.error("❌ Failed to connect to MongoDB:", connError.message);
+        // Continue to set up routes - they'll handle connection errors via middleware
+      }
     }
 
-    // Health
-    app.get("/", (req, res) => {
-      res.send("MovieMaster Pro Server is running");
-    });
+    // Create indexes if collections are initialized
+    if (watchlistCollection) {
+      try {
+        await watchlistCollection.createIndex(
+          { userEmail: 1, movieKey: 1 },
+          { unique: true }
+        );
+        await watchlistCollection.createIndex({ userEmail: 1, createdAt: -1 });
+      } catch (indexError) {
+        console.warn(
+          "Warning: failed to create watchlist indexes",
+          indexError?.message || indexError
+        );
+      }
+    }
 
     // User management APIs
     app.post("/users/create-or-update", async (req, res) => {
@@ -534,12 +607,12 @@ async function bootstrap() {
             if (!movie) {
               return entry.movieSnapshot
                 ? {
-                    ...entry.movieSnapshot,
-                    _id: entry.movieKey || entry.movieId,
-                    id: entry.movieKey || entry.movieId,
-                    watchlistedAt: entry.createdAt,
-                    isMissing: true,
-                  }
+                  ...entry.movieSnapshot,
+                  _id: entry.movieKey || entry.movieId,
+                  id: entry.movieKey || entry.movieId,
+                  watchlistedAt: entry.createdAt,
+                  isMissing: true,
+                }
                 : null;
             }
 
@@ -909,9 +982,14 @@ async function bootstrap() {
       }
     });
 
-    app.listen(port, () => {
-      console.log(`Server is running on port ${port}`);
-    });
+    // For local development: start the server with app.listen()
+    if (!process.env.VERCEL) {
+      app.listen(port, () => {
+        console.log(`Server is running on port ${port}`);
+      });
+    } else {
+      console.log("🚀 Running on Vercel");
+    }
   } catch (err) {
     console.error("❌ Failed to start server:", err.message);
 
@@ -928,8 +1006,18 @@ async function bootstrap() {
       console.error("\n💡 Run: node test-connection.js to diagnose the issue");
     }
 
-    process.exit(1);
+    if (!process.env.VERCEL) {
+      process.exit(1);
+    }
   }
 }
 
-bootstrap();
+// Start bootstrap - this will run on both local and Vercel
+// Don't await - routes will be set up, connection happens lazily via middleware
+bootstrap().catch(err => {
+  console.error("Bootstrap error:", err);
+  // Don't crash - let middleware handle connection errors
+});
+
+// Export app for Vercel serverless functions
+module.exports = app;
